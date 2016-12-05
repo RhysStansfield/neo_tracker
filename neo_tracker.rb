@@ -1,4 +1,6 @@
 require 'pry'
+require 'net/http'
+require 'json'
 require 'curses'
 
 module NeoTracker
@@ -63,6 +65,10 @@ module NeoTracker
         get_option
       end
 
+      def get_string
+        window.getstr
+      end
+
       def newline
         set_cursor_position(current_y + 1, margin_x)
       end
@@ -81,6 +87,9 @@ module NeoTracker
 
         newline
         print_out("You selected #{input}")
+        newline
+
+        option.new(self).run
 
         sleep(2)
       end
@@ -139,18 +148,97 @@ module NeoTracker
       end
 
       class NeoFeed
-        attr_accessor :app
+        attr_accessor :app, :api_key, :start_date, :end_date, :data
 
         def initialize(app)
           self.app = app
+          self.api_key = ENV['NASA_API_KEY'] || 'DEMO_KEY'
+        end
+
+        def run
+          app.print_out("Enter start date (YYYY-MM-DD) - leave blank to start from now:")
+          app.newline
+          start_date_str = app.get_string
+          app.newline
+
+          self.start_date = start_date_str if valid_date?(start_date_str)
+
+          app.print_out("Enter end date (YYYY-MM-DD) - leave blank to default to 7 days from start date:")
+          app.newline
+          end_date_string = app.get_string
+          app.newline
+
+          self.end_date = end_date_string if valid_date?(end_date_string)
+
+          fetch_data
+
+          app.print_out("Fetched data")
+          app.newline
+          app.print_out(data.keys.join('|'))
+        end
+
+        private
+
+        def fetch_data
+          url = "https://api.nasa.gov/neo/rest/v1/feed?api_key=#{api_key}"
+          url += "&start_date=#{start_date}" if start_date
+          url += "&end_date=#{end_date}" if end_date
+          uri = URI(url)
+
+          Net::HTTP.start(uri.host, uri.port, use_ssl: true) do |http|
+            self.data = JSON.parse(http.request(Net::HTTP::Get.new(uri)).body)
+          end
+        end
+
+        def valid_date?(date_str)
+          !!(date_str.match(/\d{4}-\d{2}-\d{2}/) && Date.parse(date_str))
+        rescue ArgumentError
+          false
         end
       end
 
       class NeoLookup
-        attr_accessor :app
+        attr_accessor :app, :api_key, :neo_id, :data
 
         def initialize(app)
           self.app = app
+          self.api_key = ENV['NASA_API_KEY'] || 'DEMO_KEY'
+        end
+
+        def run
+          app.print_out("Enter id of NEO to inspect")
+          app.newline
+          self.neo_id = app.get_string
+          app.newline
+
+          fetch_data
+
+          if data
+            app.print_out("Fetched data")
+            app.newline
+            app.print_out(data.keys.join('|'))
+          end
+        end
+
+        private
+
+        def fetch_data
+          url = "https://api.nasa.gov/neo/rest/v1/neo/#{neo_id}?api_key=#{api_key}"
+          uri = URI(url)
+
+          Net::HTTP.start(uri.host, uri.port, use_ssl: true) do |http|
+            response = http.request(Net::HTTP::Get.new(uri))
+
+            case response
+            when Net::HTTPNotFound then handle_error
+            when Net::HTTPSuccess then self.data = JSON.parse(response.body)
+            end
+          end
+        end
+
+        def handle_error
+          app.newline
+          app.print_out("Couldn't find NEO with that ID!")
         end
       end
     end
